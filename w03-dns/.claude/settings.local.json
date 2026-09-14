@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 task2_steering.py --pcapng)",
+      "Bash(python3 -c \"import task2_steering\")",
+      "Bash(py --version)",
+      "Bash(py -3 --version)",
+      "Read(//c/Users/psu08/AppData/Local/Programs/**)",
+      "Read(//c/Program Files/**)",
+      "Read(//c/Users/psu08/**)",
+      "PowerShell(python --version 2>&1; python3 --version 2>&1)",
+      "PowerShell(Get-Command *)",
+      "PowerShell($env:PATH -split \";\" | Where-Object {$_ -ne \"\"})",
+      "PowerShell(head 20 *)",
+      "Bash(wsl --list --verbose)",
+      "Bash(wsl *)"
+    ]
+  }
+}

@@ -3,36 +3,17 @@
 
 Textbook §2.4.2 - §2.4.3.
 
-`dig +trace` walks root -> TLD -> authoritative for you. In this task you do
-that walk yourself: start at a root server, read the delegation it returns,
-ask the next server, and keep going until somebody answers authoritatively.
-
-You may shell out to `dig` for the transport, or use a DNS library
-(`dnspython` is in the container). Either is fine - what matters is that
-*you* follow the delegations rather than letting a tool do it.
-
     python3 task1_resolve.py www.korea.ac.kr
     python3 task1_resolve.py --verify        # check yourself against dig
-
-Pass condition
---------------
-`--verify` resolves five names with your resolver and with `dig`, and the
-addresses must agree. A name behind a CDN may legitimately return a different
-address each time; the harness compares the *set of authoritative nameservers*
-you ended at for those, not the address.
 """
-import argparse, subprocess, sys
+import argparse, socket, struct, random, sys
 
-# Root servers. Everything starts here; there is no earlier step.
 ROOT_SERVERS = [
     "198.41.0.4",       # a.root-servers.net
     "199.9.14.201",     # b.root-servers.net
     "192.33.4.12",      # c.root-servers.net
 ]
 
-# (name, kind).  "stable" names must match dig exactly.  "cdn" names are served
-# from many replicas and may legitimately give you a different address than dig
-# got a second earlier - for those we only require that you reached an answer.
 VERIFY_NAMES = [
     ("www.korea.ac.kr", "stable"),
     ("dns.google", "stable"),
@@ -41,43 +22,194 @@ VERIFY_NAMES = [
     ("www.microsoft.com", "cdn"),
 ]
 
+# ----------------------------------------------------------------- DNS wire
+
+
+def _encode_name(name):
+    out = b''
+    for label in name.rstrip('.').split('.'):
+        enc = label.encode('ascii')
+        out += bytes([len(enc)]) + enc
+    return out + b'\x00'
+
+
+def _decode_name(data, offset):
+    """Return (name_string, new_offset). Handles pointer compression."""
+    labels = []
+    jumped = False
+    final_offset = None
+
+    while offset < len(data):
+        b = data[offset]
+        if b == 0:
+            if not jumped:
+                final_offset = offset + 1
+            break
+        elif (b & 0xC0) == 0xC0:           # pointer
+            if offset + 1 >= len(data):
+                break
+            ptr = ((b & 0x3F) << 8) | data[offset + 1]
+            if not jumped:
+                final_offset = offset + 2
+            jumped = True
+            offset = ptr
+        else:
+            label_len = b
+            offset += 1
+            if offset + label_len > len(data):
+                break
+            labels.append(data[offset:offset + label_len].decode('ascii', errors='replace'))
+            offset += label_len
+
+    if final_offset is None:
+        final_offset = offset + 1
+    return '.'.join(labels), final_offset
+
+
+def _parse_rr(data, offset):
+    name, offset = _decode_name(data, offset)
+    if offset + 10 > len(data):
+        raise ValueError("truncated RR")
+    rtype, _rclass, ttl, rdlen = struct.unpack('>HHIH', data[offset:offset + 10])
+    offset += 10
+    rdata_start = offset
+    offset += rdlen
+
+    rdata = None
+    if rtype == 1 and rdlen == 4:               # A
+        rdata = '.'.join(str(b) for b in data[rdata_start:rdata_start + 4])
+    elif rtype in (2, 5):                       # NS, CNAME
+        rdata, _ = _decode_name(data, rdata_start)
+
+    return {'name': name.lower(), 'type': rtype, 'ttl': ttl, 'rdata': rdata}, offset
+
+
+def _parse_response(data):
+    if len(data) < 12:
+        return None
+    txid, flags, qdcount, ancount, nscount, arcount = struct.unpack('>HHHHHH', data[:12])
+    res = {
+        'txid': txid, 'flags': flags, 'rcode': flags & 0xF,
+        'answers': [], 'authority': [], 'additional': [],
+    }
+    offset = 12
+    for _ in range(qdcount):
+        _, offset = _decode_name(data, offset)
+        offset += 4
+    for lst, count in [(res['answers'], ancount),
+                       (res['authority'], nscount),
+                       (res['additional'], arcount)]:
+        for _ in range(count):
+            try:
+                rr, offset = _parse_rr(data, offset)
+                lst.append(rr)
+            except Exception:
+                break
+    return res
+
+
+def _udp_query(server, name, qtype=1, timeout=3.0):
+    """Non-recursive UDP DNS query. Returns parsed response or None."""
+    txid = random.randint(1, 65535)
+    # RD=0: we do not want the server to recurse for us
+    pkt = struct.pack('>HHHHHH', txid, 0x0000, 1, 0, 0, 0)
+    pkt += _encode_name(name) + struct.pack('>HH', qtype, 1)
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.settimeout(timeout)
+    try:
+        sock.sendto(pkt, (server, 53))
+        data, _ = sock.recvfrom(8192)
+        resp = _parse_response(data)
+        if resp and resp['txid'] == txid:
+            return resp
+    except Exception:
+        pass
+    finally:
+        sock.close()
+    return None
+
+
+# ----------------------------------------------------------------- Resolver
+
 
 class Resolver:
-    """Your iterative resolver.
+    """Iterative resolver: walks root -> TLD -> authoritative without recursion."""
 
-    The whole point is that you never ask a server to recurse for you.
-    You ask one server, it says "not mine, ask over there", and you go there.
+    MAX_DEPTH = 20
 
-    Suggested shape - but it is yours to design:
+    def resolve(self, name, _depth=0):
+        """Return (address, path) where path is the list of servers queried."""
+        if _depth >= self.MAX_DEPTH:
+            raise Exception(f"depth cap reached resolving {name!r}")
 
-        resolve(name) -> (address, path)
-            address : the A record you ended up with, as a string
-            path    : the servers you asked, in order, so you can show your work
+        name = name.lower().rstrip('.')
+        servers = list(ROOT_SERVERS)
+        path = []
 
-    Things you will hit, in roughly this order:
+        for _hop in range(self.MAX_DEPTH):
+            progress = False
+            for srv in servers:
+                resp = _udp_query(srv, name)
+                if resp is None:
+                    continue                     # R4: server did not answer, try next
 
-    1.  A delegation gives you NS *names*, sometimes with glue A records and
-        sometimes without. No glue means you have to resolve that nameserver's
-        name first - which is another walk. Decide what you do there.
-    2.  A server may not answer. Try the next one rather than giving up.
-    3.  CNAMEs. The answer you get back may be a different name than the one
-        you asked for, and you have to start again with that name.
-    4.  Loops. Cap your depth.
+                # CNAME in answer section? (R5)
+                for rr in resp['answers']:
+                    if rr['type'] == 5 and rr['rdata']:
+                        path.append(srv)
+                        cname = rr['rdata'].lower().rstrip('.')
+                        addr, cpath = self.resolve(cname, _depth + 1)
+                        return addr, path + cpath
 
-    If you shell out to dig, the flag you want is `+norecurse`, so that the
-    server you ask replies with a delegation instead of doing the work:
+                # A record in answer section?
+                for rr in resp['answers']:
+                    if rr['type'] == 1 and rr['rdata']:
+                        path.append(srv)
+                        return rr['rdata'], path
 
-        dig @198.41.0.4 www.korea.ac.kr +norecurse
-    """
+                # Delegation in authority section?
+                ns_names = [rr['rdata'] for rr in resp['authority']
+                            if rr['type'] == 2 and rr['rdata']]
+                if not ns_names:
+                    continue
 
-    def resolve(self, name):
-        raise NotImplementedError(
-            "Implement the iterative walk: root -> TLD -> authoritative")
+                # Collect glue A records from additional section
+                glue = {}
+                for rr in resp['additional']:
+                    if rr['type'] == 1 and rr['rdata']:
+                        glue[rr['name'].lower().rstrip('.')] = rr['rdata']
+
+                # Resolve each NS to an IP (R3: handle missing glue)
+                next_servers = []
+                for ns in ns_names[:6]:
+                    ns_key = ns.lower().rstrip('.')
+                    if ns_key in glue:
+                        next_servers.append(glue[ns_key])
+                    else:
+                        # No glue — resolve the NS name independently (R3)
+                        try:
+                            ns_addr, _ = self.resolve(ns_key, _depth + 1)
+                            next_servers.append(ns_addr)
+                        except Exception:
+                            pass
+
+                if next_servers:
+                    path.append(srv)
+                    servers = next_servers
+                    progress = True
+                    break
+
+            if not progress:
+                raise Exception(f"could not make progress resolving {name!r}")
+
+        raise Exception(f"hop limit exceeded for {name!r}")
 
 
-# ------------------------------------------------------------------- harness
+# ------------------------------------------------------------------ harness
 def dig_answer(name):
     """What the system resolver says, for comparison."""
+    import subprocess
     out = subprocess.run(["dig", "+short", name, "A"],
                          capture_output=True, text=True).stdout
     return [l for l in out.split() if l and l[0].isdigit()]

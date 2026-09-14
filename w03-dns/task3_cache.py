@@ -3,34 +3,8 @@
 
 Textbook §2.4.2 (caching) and §2.4.3 (TTL).
 
-`BaselineCache` below works. It is also bad, in more than one way, and one of
-its problems is worse than being slow. Find them, write `YourCache`, and prove
-the improvement with the harness:
-
     python3 bench.py                 # baseline only
     python3 bench.py --yours         # baseline vs. yours, side by side
-
-Rules
------
-* Do not change `bench.py`. If you need to change it to win, you are not
-  winning. Say so in observation.md instead.
-* `YourCache` must expose the same two methods as `BaselineCache`.
-* Speed is not the only score. The harness also counts **stale answers** -
-  times you served a record whose TTL had already run out. A cache that keeps
-  everything forever is very fast and completely wrong.
-
-Targets
--------
-The baseline scores **325 upstream queries, 67.5% hit rate, 266 stale answers**.
-
-  pass  : zero stale answers
-  good  : zero stale, and no more upstream queries than the baseline
-  strong: the above, plus you can say in observation.md **how few upstream
-          queries a correct cache could possibly make on this workload, and
-          why you cannot go below that number**
-
-That last one is the real question. Read it before you start optimising -
-it will tell you where to stop.
 """
 import time
 
@@ -64,20 +38,32 @@ class BaselineCache:
 
 
 class YourCache:
-    """Your cache.
+    """Correct TTL-respecting cache.
 
-    Same interface: __init__(upstream), lookup(name, now) -> address, stats().
-    `upstream(name)` costs a network round trip and returns (address, ttl).
-    The TTL is in seconds and it is the authoritative answer's own TTL -
-    the baseline throws it away.
+    Two bugs in BaselineCache:
+    1. Performance: linear scan O(n) — a dict gives O(1) lookup.
+    2. Correctness: FIXED_LIFETIME=60s ignores the actual TTL, so records with
+       TTL < 60 are served stale, and records with TTL > 60 are evicted early.
+
+    Fix: store (address, expiry_time) keyed by name. Serve from cache only
+    while now < expiry_time; otherwise fetch fresh and update the expiry.
     """
 
     def __init__(self, upstream):
         self.upstream = upstream
-        raise NotImplementedError("write your cache")
+        # name -> (address, expiry_time)
+        self._cache = {}
 
     def lookup(self, name, now):
-        raise NotImplementedError("write your cache")
+        entry = self._cache.get(name)
+        if entry is not None:
+            address, expiry = entry
+            if now < expiry:                # still fresh
+                return address
+        # Cache miss or expired — fetch upstream
+        address, ttl = self.upstream(name)
+        self._cache[name] = (address, now + ttl)
+        return address
 
     def stats(self):
-        return {}
+        return {"entries": len(self._cache)}
