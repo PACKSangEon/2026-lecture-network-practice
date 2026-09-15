@@ -1,0 +1,7 @@
+  ok    www.korea.ac.kr        you=163.152.6.10     dig=163.152.6.10   hops=3
+  ok    dns.google             you=8.8.4.4          dig=8.8.8.8,8.8.4.4   hops=3
+  ok    en.wikipedia.org       you=103.102.166.224  dig=103.102.166.224,103.102.166.224   hops=6
+  ok    www.stanford.edu       you=3.33.186.135     dig=15.197.167.90,3.33.186.135,15.197.167.90,3.33.186.135   hops=6
+  ok    www.microsoft.com      you=23.49.206.40     dig=23.49.206.40,23.49.206.40,23.49.206.40,23.49.206.40,23.49.206.40   hops=10
+
+  5/5 ok
