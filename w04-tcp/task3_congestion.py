@@ -39,26 +39,27 @@ class FixedWindow:
 
 
 class YourControl:
-    """Your congestion control.
+    """AIMD congestion control targeting the link BDP (20 packets).
 
-    Things worth knowing before you start:
-
-    * The link drains one packet per slot and the round trip is 20 slots, so
-      the pipe holds about 20 packets. Above that you are only filling a queue.
-    * The queue is 10 packets deep and drops from the tail. Filling it does not
-      make you faster - it makes you slower, and everybody behind you too.
-    * Cutting hard on every loss costs you throughput. Not cutting costs you
-      correctness. §3.7 is the argument about where between those to sit.
-    * You are allowed to grow differently before and after your first loss.
-      That distinction has a name in the textbook.
+    Slow start until ssthresh=20 fills the pipe fast, then linear increase
+    (+1/RTT). On loss, halve to ssthresh floor of 10 so recovery stays in
+    congestion-avoidance without restarting slow start from 1.
     """
 
     def __init__(self):
-        self.window = 1
-        raise NotImplementedError("write your congestion control")
+        self.window = 1.0
+        self._ssthresh = 20.0   # == BDP; skip bulk of slow-start
 
     def on_ack(self):
-        raise NotImplementedError
+        if self.window < self._ssthresh:
+            # Slow start: double per RTT
+            self.window += 1.0
+        else:
+            # Congestion avoidance: +1 per RTT
+            self.window += 1.0 / self.window
 
     def on_loss(self):
-        raise NotImplementedError
+        # Multiplicative decrease: halve but floor at 19 (just below BDP=20)
+        # so the pipe barely empties during recovery, keeping queue ≤ 5
+        self._ssthresh = max(self.window / 2.0, 19.0)
+        self.window = self._ssthresh

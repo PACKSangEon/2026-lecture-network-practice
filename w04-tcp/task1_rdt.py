@@ -53,40 +53,75 @@ class UnreliableChannel:
 
 
 class Sender:
-    """Your sender.
+    """Stop-and-wait sender.
 
-    Requirements are in task1.md. The short version:
-
-      - break `data` into PAYLOAD-sized pieces and number them
-      - retransmit what is not acknowledged
-      - do not assume an ACK means what you think it means until you have
-        checked the number on it
-
-    You choose the protocol: stop-and-wait is the easiest to get right and the
-    slowest; a sliding window is the point of §3.4.3. Say which you chose and
-    why in observation.md.
+    Sends one chunk at a time, waits for matching ACK, retransmits on timeout.
+    Chosen over sliding window: simpler duplicate/reorder handling with no
+    out-of-order buffer needed on either side.
     """
 
+    TIMEOUT = 20  # steps before retransmit
+
     def __init__(self, data_channel, ack_channel, data):
-        raise NotImplementedError("write your sender")
+        self._data_ch = data_channel
+        self._ack_ch = ack_channel
+        self._chunks = [data[i:i + PAYLOAD] for i in range(0, len(data), PAYLOAD)]
+        self._num_chunks = len(self._chunks)
+        self._next = 0          # next seq to deliver
+        self._step = 0
+        self._last_tx = -(self.TIMEOUT)  # forces immediate send on first step
+
+    def _transmit(self):
+        self._data_ch.send((self._next, self._chunks[self._next]))
+        self._last_tx = self._step
 
     def step(self):
         """Do one unit of work. Return False when you believe you are done."""
-        raise NotImplementedError
+        self._step += 1
+
+        # Drain one ACK and advance if it matches current seq
+        pkt = self._ack_ch.receive()
+        if pkt is not None and pkt == self._next:
+            self._next += 1
+            self._last_tx = -(self.TIMEOUT)  # trigger immediate send of next
+
+        if self._next >= self._num_chunks:
+            return False
+
+        if self._step - self._last_tx >= self.TIMEOUT:
+            self._transmit()
+
+        return True
 
 
 class Receiver:
     """Your receiver. Hands back the reassembled bytes via `.data()`."""
 
     def __init__(self, data_channel, ack_channel):
-        raise NotImplementedError("write your receiver")
+        self._data_ch = data_channel
+        self._ack_ch = ack_channel
+        self._expected = 0
+        self._buf = b""
 
     def step(self):
-        raise NotImplementedError
+        pkt = self._data_ch.receive()
+        if pkt is None:
+            return
+        seq, payload = pkt
+        if seq == self._expected:
+            # In-order: accept and advance
+            self._buf += payload
+            self._expected += 1
+            self._ack_ch.send(seq)
+        elif seq < self._expected:
+            # Duplicate: re-ACK so sender doesn't time out waiting
+            self._ack_ch.send(seq)
+        # seq > expected: out-of-order in stop-and-wait, ignore;
+        # sender will retransmit the missing one after timeout
 
     def data(self):
         """The bytes reassembled so far."""
-        raise NotImplementedError
+        return self._buf
 
 
 # ------------------------------------------------------------------- harness
