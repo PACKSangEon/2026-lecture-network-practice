@@ -52,13 +52,29 @@ class YourTable:
 
     The second is what hardware does. The first is easier and often enough.
     Say which you chose and what it cost you in memory.
+
+    Chosen: group by prefix length. One dict per length that is actually in
+    use, keyed by network. A lookup masks the address once per length,
+    longest first, and stops at the first hit - at most 33 dict probes,
+    in practice only the handful of lengths the table holds (7 here).
+    Memory: one dict entry per route plus a sorted list of lengths.
     """
 
     def __init__(self):
-        raise NotImplementedError("write your table")
+        self.by_len = {}                      # prefix_len -> {network: next_hop}
+        self.probes = []                      # [(mask, dict)] longest first
 
     def add(self, network, prefix_len, next_hop):
-        raise NotImplementedError
+        bucket = self.by_len.get(prefix_len)
+        if bucket is None:
+            bucket = self.by_len[prefix_len] = {}
+            self.probes = [((0xFFFFFFFF << (32 - p)) & 0xFFFFFFFF, self.by_len[p])
+                           for p in sorted(self.by_len, reverse=True)]
+        bucket[network] = next_hop
 
     def lookup(self, address):
-        raise NotImplementedError
+        for mask, bucket in self.probes:
+            hop = bucket.get(address & mask)
+            if hop is not None:
+                return hop
+        return None

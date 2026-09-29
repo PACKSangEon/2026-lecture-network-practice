@@ -16,6 +16,26 @@ exactly the thing you are supposed to understand this week.
 import argparse
 
 
+def _ip_to_int(text):
+    parts = text.strip().split(".")
+    if len(parts) != 4:
+        raise ValueError(f"not a dotted quad: {text!r}")
+    value = 0
+    for p in parts:
+        if not p.isdigit() or int(p) > 255:
+            raise ValueError(f"bad octet {p!r} in {text!r}")
+        value = (value << 8) | int(p)
+    return value
+
+
+def _int_to_ip(value):
+    return ".".join(str((value >> s) & 0xFF) for s in (24, 16, 8, 0))
+
+
+def _mask(plen):
+    return (0xFFFFFFFF << (32 - plen)) & 0xFFFFFFFF
+
+
 def parse_cidr(cidr):
     """'163.152.6.0/24' -> (network as int, prefix length).
 
@@ -23,7 +43,16 @@ def parse_cidr(cidr):
     whose host bits are set when they should not be (163.152.6.5/24 is a
     common way to write a host, but it is not a network).
     """
-    raise NotImplementedError("parse a CIDR block")
+    addr, sep, plen_text = cidr.strip().partition("/")
+    if not sep or not plen_text.isdigit():
+        raise ValueError(f"missing prefix length: {cidr!r}")
+    plen = int(plen_text)
+    if not 0 <= plen <= 32:
+        raise ValueError(f"prefix length out of range 0-32: {cidr!r}")
+    net = _ip_to_int(addr)
+    if net & ~_mask(plen) & 0xFFFFFFFF:
+        raise ValueError(f"host bits set - {cidr!r} is a host, not a network")
+    return net, plen
 
 
 def network_range(cidr):
@@ -31,8 +60,17 @@ def network_range(cidr):
 
     Careful at the edges. /31 and /32 do not have a usable host range in the
     ordinary sense - decide what you return and say so in observation.md.
+
+    /31 (RFC 3021 point-to-point): both addresses are usable, no broadcast -> None.
+    /32: the single address is the only host, no broadcast -> None.
     """
-    raise NotImplementedError("compute the range")
+    net, plen = parse_cidr(cidr)
+    last = net | (~_mask(plen) & 0xFFFFFFFF)
+    if plen == 32:
+        return _int_to_ip(net), _int_to_ip(net), None
+    if plen == 31:
+        return _int_to_ip(net), _int_to_ip(last), None
+    return _int_to_ip(net + 1), _int_to_ip(last - 1), _int_to_ip(last)
 
 
 class ForwardingTable:
@@ -43,13 +81,24 @@ class ForwardingTable:
     The default route 0.0.0.0/0 matches everything and is the shortest prefix,
     so it must lose to any other match. If two entries have the same prefix
     length, the table is malformed - say what you do.
+
+    Same (network, length) added twice: the later add replaces the earlier
+    one, like a route update - one prefix never holds two next hops.
     """
 
+    def __init__(self):
+        self.routes = {}                      # (network, prefix_len) -> next_hop
+
     def add(self, cidr, next_hop):
-        raise NotImplementedError
+        self.routes[parse_cidr(cidr)] = next_hop
 
     def lookup(self, address):
-        raise NotImplementedError
+        addr = _ip_to_int(address)
+        best_len, best_hop = -1, None
+        for (net, plen), hop in self.routes.items():
+            if addr & _mask(plen) == net and plen > best_len:
+                best_len, best_hop = plen, hop
+        return best_hop
 
 
 # ------------------------------------------------------------------- harness
