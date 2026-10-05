@@ -33,7 +33,22 @@ def dijkstra(graph, source):
 
     You write the loop. `heapq` is allowed; `networkx` is not.
     """
-    raise NotImplementedError("implement Dijkstra")
+    import heapq
+    dist = {source: 0}
+    pq = [(0, source)]
+    done = set()
+    while pq:
+        d, u = heapq.heappop(pq)
+        if u in done:
+            continue
+        done.add(u)
+        for v, w in graph[u].items():
+            nd = d + w
+            if nd < dist.get(v, float("inf")):
+                dist[v] = nd
+                heapq.heappush(pq, (nd, v))
+    del dist[source]
+    return dist
 
 
 def forwarding_table(graph, source):
@@ -42,13 +57,32 @@ def forwarding_table(graph, source):
     Return {destination: first_hop}, where first_hop is a **direct neighbour**
     of `source` - the one interface a packet for that destination leaves by.
 
-    The source itself is not in the table. Neither are unreachable nodes.
-
-    The trap: it is easy to compute the full path and then take path[1]. That
-    works, but think about what a router does when two shortest paths tie, and
-    pick a rule. Say which in observation.md.
+    Tie-breaking rule: when two equal-cost paths exist, the first_hop with the
+    lexicographically smaller name wins (achieved by sorting neighbours before
+    pushing to the heap).
     """
-    raise NotImplementedError("implement the forwarding table")
+    import heapq
+    INF = float("inf")
+    # best[node] = (cost, first_hop)
+    best = {source: (0, None)}
+    # heap entries: (cost, node, first_hop)
+    pq = [(0, source, None)]
+    done = set()
+    while pq:
+        cost, node, first_hop = heapq.heappop(pq)
+        if node in done:
+            continue
+        done.add(node)
+        best[node] = (cost, first_hop)
+        for nbr, w in sorted(graph[node].items()):
+            if nbr in done:
+                continue
+            hop = nbr if node == source else first_hop
+            nc = cost + w
+            if nc < best.get(nbr, (INF, None))[0]:
+                best[nbr] = (nc, hop)
+                heapq.heappush(pq, (nc, nbr, hop))
+    return {d: h for d, (_, h) in best.items() if d != source and h is not None}
 
 
 def link_down(graph, a, b):

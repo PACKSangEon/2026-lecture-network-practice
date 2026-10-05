@@ -1,0 +1,11 @@
+# Path B — Docker 미실행. 아래 시간은 FRR 기본값(frr defaults traditional)으로 계산.
+# hello interval = 10s, dead interval = 40s (traditional 기본값)
+# r1 의 eth1 을 강제로 내리면(ip link set eth1 down) FRR 은 즉시 인터페이스 DOWN 이벤트를
+# 감지하고 LSA 를 플러딩한다 — dead interval 을 기다리지 않는다.
+# 실측 없음; 아래는 ip link down 시 FRR 동작(즉시 LSA 재발신)에 근거한 추정치이다.
+
+재수렴 감지: 2 초
+# 설명: ip link down 이벤트 → FRR 즉시 neighbor DOWN 처리 → Router LSA 재발신 →
+# 전체 area 플러딩(3대 소규모) → SPF 재계산 완료까지 약 2초 이내.
+# 만약 링크가 물리적으로 살아 있고 OSPF hello 만 손실되면 dead interval(40s)이 경과한
+# 뒤에야 감지되므로 재수렴은 40~42초 소요된다.

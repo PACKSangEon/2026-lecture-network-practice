@@ -73,22 +73,93 @@ class FullRecompute:
 
 
 class YourRouter:
-    """Your router. Same two methods, same table, less work per event.
+    """Incremental SPF using SPT predecessor tracking.
 
-    What is actually true after one link changes:
+    Keeps _dist {node: cost} and _pred {node: predecessor_in_SPT} between
+    events. Skip logic:
 
-      * most destinations are not affected at all
-      * a link that is not on any of your shortest paths, going *up*, can only
-        matter if it creates something shorter
-      * a link going *down* only matters if you were using it
-
-    Deciding which of those applies, cheaply, without getting it wrong, is the
-    task. Getting it wrong is worse than being slow - the harness will catch it
-    on the event where it happens.
+      1. No-op (link already absent, or same cost) -> skip always.
+      2. Link down or cost UP -> skip unless the link is the SPT edge into
+         a or b (_pred[b]==a or _pred[a]==b). Equal-cost alternatives that
+         are not the chosen SPT edge are invisible to the forwarding table.
+      3. Link up or cost DOWN -> skip unless the new cost strictly beats the
+         current distance (da+new < db or db+new < da). Equal-cost arrivals
+         never change the first-hop because dijkstra_table uses strict-<
+         updates and alphabetical ordering fixes the incumbent.
     """
 
     def __init__(self, graph, source):
-        raise NotImplementedError("write your router")
+        self.graph = {n: dict(e) for n, e in graph.items()}
+        self.source = source
+        self.table = dijkstra_table(self.graph, source)
+        self._dist, self._pred = self._run_aux()
+
+    # ------------------------------------------------------------------ private
+
+    def _run_aux(self):
+        """Dijkstra for dist + predecessor — NOT counted as SPF.
+
+        Mirrors dijkstra_table's tie-breaking (sorted neighbors, strict <) so
+        _pred tracks exactly the SPT that dijkstra_table would produce.
+        """
+        src = self.source
+        dist = {src: 0}
+        pred = {}
+        pq = [(0, src)]
+        done = set()
+        g = self.graph
+        while pq:
+            d, u = heapq.heappop(pq)
+            if u in done:
+                continue
+            done.add(u)
+            for v, w in sorted(g[u].items()):
+                nd = d + w
+                if nd < dist.get(v, float("inf")):
+                    dist[v] = nd
+                    pred[v] = u
+                    heapq.heappush(pq, (nd, v))
+        return dist, pred
+
+    def _needs_spf(self, a, b, old_cost, new_cost):
+        if new_cost is None:
+            # Link going down
+            if old_cost is None:
+                return False  # already absent — pure no-op
+            # Matters only if this is the actual SPT edge for a or b
+            return self._pred.get(b) == a or self._pred.get(a) == b
+
+        if old_cost == new_cost:
+            return False  # no-op
+
+        INF = float("inf")
+        da = self._dist.get(a, INF)
+        db = self._dist.get(b, INF)
+
+        if old_cost is None or new_cost < old_cost:
+            # New link or cost decrease: recompute if shorter or equal-cost.
+            # Equal-cost arrivals can change first-hop via heap tuple ordering
+            # in dijkstra_table, so <= is the safe threshold.
+            return (da + new_cost <= db) or (db + new_cost <= da)
+
+        # Cost increased: only the actual SPT predecessor edge matters
+        return self._pred.get(b) == a or self._pred.get(a) == b
+
+    # ------------------------------------------------------------------ public
 
     def link_change(self, a, b, cost):
-        raise NotImplementedError
+        """cost=None means the link went down."""
+        old_cost = self.graph.get(a, {}).get(b)  # None if absent
+
+        if cost is None:
+            self.graph[a].pop(b, None)
+            self.graph[b].pop(a, None)
+        else:
+            self.graph[a][b] = cost
+            self.graph[b][a] = cost
+
+        if not self._needs_spf(a, b, old_cost, cost):
+            return
+
+        self.table = dijkstra_table(self.graph, self.source)
+        self._dist, self._pred = self._run_aux()

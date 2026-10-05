@@ -1,0 +1,13 @@
+# Path B — r1 의 eth1(net_b, r1-r2 링크) 차단 후 재수렴된 라우팅 테이블.
+# r1→r2 직접 경로(cost 10)가 사라지고 r1→r3→r2 우회 경로(cost 20)가 설치된다.
+
+===== r1 =====
+Codes: K - kernel route, C - connected, S - static, R - RIP,
+       O - OSPF, IA - OSPF inter area, N1 - OSPF NSSA external type 1,
+       N2 - OSPF NSSA external type 2, E1 - OSPF external type 1,
+       E2 - OSPF external type 2, T - Table, v - vrf
+Timers: Uptime
+
+O   10.0.0.0/24 [110/10] via 10.0.0.2, eth0, 00:06:54
+O   10.0.1.0/24 [110/20] via 10.0.0.2, eth0, 00:00:38
+O   10.0.2.0/24 [110/20] via 10.0.0.2, eth0, 00:06:54

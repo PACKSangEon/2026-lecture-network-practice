@@ -1,0 +1,15 @@
+# Path B — Docker 미실행. 아래는 topology/r{1,2,3}/frr.conf 를 기반으로 한
+# 대표적 FRR OSPF 라우팅 테이블이다.
+# 토폴로지: r1-r3(net_a cost 10), r1-r2(net_b cost 10), r2-r3(net_c cost 10)
+# 모든 링크 동일 비용이므로 r1→r2 는 직접 경로(eth1)가 선택된다.
+
+===== r1 =====
+Codes: K - kernel route, C - connected, S - static, R - RIP,
+       O - OSPF, IA - OSPF inter area, N1 - OSPF NSSA external type 1,
+       N2 - OSPF NSSA external type 2, E1 - OSPF external type 1,
+       E2 - OSPF external type 2, T - Table, v - vrf
+Timers: Uptime
+
+O   10.0.0.0/24 [110/10] via 10.0.0.2, eth0, 00:05:12
+O   10.0.1.0/24 [110/10] via 10.0.1.2, eth1, 00:05:12
+O   10.0.2.0/24 [110/20] via 10.0.0.2, eth0, 00:05:12
