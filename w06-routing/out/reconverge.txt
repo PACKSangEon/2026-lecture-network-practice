@@ -1,11 +1,24 @@
-# Path B — Docker 미실행. 아래 시간은 FRR 기본값(frr defaults traditional)으로 계산.
-# hello interval = 10s, dead interval = 40s (traditional 기본값)
-# r1 의 eth1 을 강제로 내리면(ip link set eth1 down) FRR 은 즉시 인터페이스 DOWN 이벤트를
-# 감지하고 LSA 를 플러딩한다 — dead interval 을 기다리지 않는다.
-# 실측 없음; 아래는 ip link down 시 FRR 동작(즉시 LSA 재발신)에 근거한 추정치이다.
+# B4/B5/C — 실측 (2026-10-06)
+# 방법: 각 라우터 컨테이너 안에서 커널 FIB(`ip route show proto ospf`)를 0.05초 간격으로 감시,
+#       r1 에서 이벤트를 일으킨 시각 대비 경로가 바뀐 시각을 /proc/uptime 으로 비교
+#       (세 컨테이너가 Docker VM 커널을 공유 → 같은 시계).
+# OSPF 타이머 (show ip ospf interface eth1): Hello 10s, Dead 40s, Wait 40s, Retransmit 5s
 
-재수렴 감지: 2 초
-# 설명: ip link down 이벤트 → FRR 즉시 neighbor DOWN 처리 → Router LSA 재발신 →
-# 전체 area 플러딩(3대 소규모) → SPF 재계산 완료까지 약 2초 이내.
-# 만약 링크가 물리적으로 살아 있고 OSPF hello 만 손실되면 dead interval(40s)이 경과한
-# 뒤에야 감지되므로 재수렴은 40~42초 소요된다.
+재수렴 감지: 0.06 초    # B4 — r1 eth1 link down → 세 라우터 모두 새 경로 설치
+
+== B4  링크 다운 (r1: ip link set eth1 down) ==
+  r1  +0.06s   r2  +0.03s   r3  +0.05s
+  scenario.sh cut (1초 간격 폴링) 으로는 "재수렴 감지: 2 초" — 폴링 해상도/docker exec 지연 때문이며 실제는 0.1초 미만
+
+== B5  링크 복구 (r1: ip link set eth1 up) ==
+  1차: r1 +1.68s  r2 +6.68s  r3 +0.07s
+  2차: r1 +8.31s  r2 +13.32s r3 +0.06s
+  r3 는 r1 의 새 Router LSA(net_b 를 stub 로 재광고) 만으로 즉시 ECMP 복원.
+  r1·r2 는 net_b 위에서 hello 교환 → 2-Way → DB 교환 → Full 이 끝나야 해서 수 초~십수 초, 실행마다 다름(hello 주기 위상).
+
+== 비교: hello 만 유실 (링크는 up, r1 eth1 에서 iptables 로 OSPF(proto 89) 차단) ==
+  r1 +36.83s   r2 +36.82s   r3 변화 없음
+  dead interval 40s − (차단 직전 마지막 hello 이후 경과 시간, 0~10s) → 30~40s 범위와 일치
+
+== C  비용 변경 (r1 eth0: ip ospf cost 10 → 100, 링크 다운 없음) ==
+  r1 +0.13s (172.21 ECMP → eth1 단일)   r2 +0.13s (172.19 ECMP → r3 경유 단일)   r3 변화 없음

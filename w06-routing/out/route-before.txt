@@ -1,15 +1,22 @@
-# Path B — Docker 미실행. 아래는 topology/r{1,2,3}/frr.conf 를 기반으로 한
-# 대표적 FRR OSPF 라우팅 테이블이다.
-# 토폴로지: r1-r3(net_a cost 10), r1-r2(net_b cost 10), r2-r3(net_c cost 10)
-# 모든 링크 동일 비용이므로 r1→r2 는 직접 경로(eth1)가 선택된다.
+# B1 — 실측 (2026-10-06, Docker Desktop + quay.io/frrouting/frr:9.1.0, 3대 삼각형, 모든 링크 cost 10)
+# net_a=172.19.0.0/16 (r1 eth0 - r3 eth0), net_b=172.20.0.0/16 (r1 eth1 - r2 eth1), net_c=172.21.0.0/16 (r2 eth0 - r3 eth1)
+# B2: 각 라우터는 직접 연결되지 않은 세 번째 망을 OSPF로 배웠다 (r1→172.21, r2→172.19, r3→172.20, 모두 cost 20 ECMP).
 
 ===== r1 =====
-Codes: K - kernel route, C - connected, S - static, R - RIP,
-       O - OSPF, IA - OSPF inter area, N1 - OSPF NSSA external type 1,
-       N2 - OSPF NSSA external type 2, E1 - OSPF external type 1,
-       E2 - OSPF external type 2, T - Table, v - vrf
-Timers: Uptime
+O   172.19.0.0/16 [110/10] is directly connected, eth0, weight 1, 00:00:06
+O   172.20.0.0/16 [110/10] is directly connected, eth1, weight 1, 00:01:22
+O>* 172.21.0.0/16 [110/20] via 172.19.0.3, eth0, weight 1, 00:00:06
+  *                        via 172.20.0.3, eth1, weight 1, 00:00:06
 
-O   10.0.0.0/24 [110/10] via 10.0.0.2, eth0, 00:05:12
-O   10.0.1.0/24 [110/10] via 10.0.1.2, eth1, 00:05:12
-O   10.0.2.0/24 [110/20] via 10.0.0.2, eth0, 00:05:12
+===== r2 =====
+O>* 172.19.0.0/16 [110/20] via 172.20.0.2, eth1, weight 1, 00:00:07
+  *                        via 172.21.0.3, eth0, weight 1, 00:00:07
+O   172.20.0.0/16 [110/10] is directly connected, eth1, weight 1, 00:08:43
+O   172.21.0.0/16 [110/10] is directly connected, eth0, weight 1, 00:07:58
+
+===== r3 =====
+O   172.19.0.0/16 [110/10] is directly connected, eth0, weight 1, 00:08:43
+O>* 172.20.0.0/16 [110/20] via 172.19.0.2, eth0, weight 1, 00:01:18
+  *                        via 172.21.0.2, eth1, weight 1, 00:01:18
+O   172.21.0.0/16 [110/10] is directly connected, eth1, weight 1, 00:08:43
+

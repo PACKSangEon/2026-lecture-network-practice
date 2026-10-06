@@ -8,9 +8,9 @@
 
 ## Task 2 · OSPF Reconvergence Timing
 
-- **ip link down vs. hello timeout**: `ip link set eth1 down` 으로 인터페이스를 내리면 FRR는 dead interval(40s)을 기다리지 않고 즉시 neighbor DOWN 이벤트를 처리해 Router LSA를 재발신한다. 재수렴은 약 2초 이내로 완료됐다. 반면 링크가 물리적으로 살아 있고 hello 패킷만 사라지면 dead interval 경과 후(기본 40s)에야 neighbor가 탈락해 재수렴까지 40~42초가 걸린다.
-- **OSPF hello/dead 기본값**: `frr defaults traditional` 설정에서 hello interval=10s, dead interval=40s다. dead=4×hello 공식은 §5.3의 "neighbor 선언을 몇 번의 hello 유실 후" 규칙에 해당하며, 이 배율을 낮추면 빠르게 감지하지만 패킷 유실에 따른 오탐이 증가한다.
-- **비용 변경 vs. 링크 다운**: `scenario.sh cost`처럼 cost를 10→100으로 올리면 링크는 살아 있고 새 LSA 만 플러딩되므로 인접 관계 재수립 없이 SPF 재계산만 발생한다. 이때도 재수렴은 몇 초 이내지만 dead interval 대기가 없어 링크 다운과 구조가 다르다.
+- **traceroute (A, 캠퍼스 Wi-Fi 실측)**: 국내 경로는 3홉 `163.152.233.129`(고려대 NAT/경계)를 지나 `163.152.x` 내부망으로 들어가고, A5의 `*`는 두 종류다 — 중간 5홉의 `*`는 앞뒤 홉이 응답하므로 그 라우터만 TTL 초과 응답을 막거나 rate-limit한 것이고, 8홉 이후 끝까지 이어지는 `*`는 목적지 쪽 방화벽이 탐침 자체를 막은 것으로 보인다. `www.stanford.edu`는 AWS Global Accelerator(3.33.186.135, anycast)라 국내 망(`175.121.x`→`10.222.x`)에서 응답이 끊겨 해저 케이블 구간(A3)은 이 대상으로 관측되지 않았다. `1.1.1.1`은 12홉·~10 ms에 Cloudflare(`141.101.82.17`)에 도달 → 국내 복제본이다.
+- **B4 링크 다운 vs. hello 유실 (실측)**: 각 라우터는 직접 연결되지 않은 세 번째 망을 OSPF로 배웠다(B2, cost 20 ECMP). `ip link set eth1 down`은 FRR이 즉시 감지해 새 Router LSA를 플러딩하므로 세 라우터 모두 **0.03~0.06초**에 재수렴했다(`scenario.sh cut`의 "2초"는 1초 폴링 해상도 탓). 반면 링크는 살린 채 iptables로 OSPF hello만 막으면 **36.8초** — Hello 10s/Dead 40s 설정에서 예상 범위(30~40s)와 일치한다.
+- **B5 복구 비대칭 · C3 비용 변경**: 복구는 r3가 0.06초에 ECMP를 되찾았지만 r1·r2는 **1.7~13.3초**(실행마다 다름)가 걸렸다 — 사라짐은 로컬 이벤트 하나로 끝나지만, 새 이웃은 hello 교환→2-Way→DB 교환→Full을 거쳐야 쓰이기 때문이다. 비용 10→100 변경은 인접 관계가 그대로라 LSA 플러딩+SPF만으로 **0.13초**에 경로가 바뀌었다.
 
 ## Task 3 · Incremental SPF
 
