@@ -44,36 +44,49 @@ class NaiveSwitch:
 
 
 class YourSwitch:
-    """Your switch. Same interface, same deliveries, far less flooding.
+    """LFU eviction + frequency-based admission control.
 
-        __init__(ports, capacity)
-        handle((src, dst, time), in_port) -> ports to forward out of
+    Two improvements over NaiveSwitch:
+      1. Evict the least-frequently-used (LFU) entry, not FIFO. Hot stations
+         accumulate high counts and are never displaced by rarely-seen ones.
+      2. Decline new admissions when the table is full unless the newcomer
+         has been seen (_seen counter) more times than the LFU entry has
+         been active inside the table. This filters one-shot senders that
+         would only evict a well-established entry.
 
-    `self.table` must exist and must never hold more than `capacity` entries.
-    The harness checks this after every frame.
-
-    What the baseline gets wrong: it decides what to keep by **when the entry
-    arrived**, and that has nothing to do with whether it is about to be needed.
-    On this trace a handful of stations carry most of the traffic, and the
-    baseline keeps throwing them out to make room for stations that spoke once.
-
-    Two questions worth separating:
-
-      * which entry should leave when the table is full?
-      * should learning a new source ever be *declined*?
-
-    The second one is less obvious and is worth thinking about before you
-    dismiss it.
-
-    Note what you are NOT allowed to do: you cannot look at `where`, you cannot
-    see the future, and you cannot hold more than `capacity` entries. Everything
-    you know comes from the frames you have already handled.
+    _seen is a plain dict (not part of self.table); only self.table is
+    capacity-bounded.
     """
 
     BROADCAST = "ff:ff:ff:ff:ff:ff"
 
     def __init__(self, ports, capacity):
-        raise NotImplementedError("write your switch")
+        self.ports = ports
+        self.capacity = capacity
+        self.table = {}   # mac -> (port, hit_count_while_in_table)
+        self._seen = {}   # mac -> total times seen as source (admission counter)
 
     def handle(self, frame, in_port):
-        raise NotImplementedError
+        src, dst, now = frame
+        self._seen[src] = self._seen.get(src, 0) + 1
+
+        if src in self.table:
+            port, cnt = self.table[src]
+            self.table[src] = (in_port, cnt + 1)
+        elif len(self.table) < self.capacity:
+            self.table[src] = (in_port, 1)
+        else:
+            # Find least-frequently-used entry
+            lfu_mac = min(self.table, key=lambda m: self.table[m][1])
+            lfu_cnt = self.table[lfu_mac][1]
+            if self._seen[src] > lfu_cnt:
+                # Newcomer has proven itself more active; evict LFU
+                del self.table[lfu_mac]
+                self.table[src] = (in_port, self._seen[src])
+            # else: decline — LFU entry is still more active than this newcomer
+
+        if dst == self.BROADCAST or dst not in self.table:
+            return [p for p in range(self.ports) if p != in_port]
+        port, cnt = self.table[dst]
+        self.table[dst] = (port, cnt + 1)
+        return [] if port == in_port else [port]

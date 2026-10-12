@@ -30,7 +30,9 @@ class Switch:
     AGE_SECONDS = 300
 
     def __init__(self, ports):
-        raise NotImplementedError("write your switch")
+        self.ports = ports
+        self._table = {}   # mac -> (port, timestamp)
+        self._now = 0.0
 
     def handle(self, frame, in_port):
         """Learn from the source, then decide where the frame goes.
@@ -46,11 +48,26 @@ class Switch:
         Rule 5 is why a switch works at all before it has learned anything, and
         it is also what Task 3 is about.
         """
-        raise NotImplementedError
+        src, dst, now = frame
+        self._now = now
+        # Rule 1: learn source MAC with current timestamp
+        self._table[src] = (in_port, now)
+        other = [p for p in range(self.ports) if p != in_port]
+        # Rule 3: broadcast floods everywhere except back
+        if dst == self.BROADCAST:
+            return other
+        # Rule 4: known, non-aged destination -> direct forward
+        if dst in self._table:
+            out_port, ts = self._table[dst]
+            if now - ts < self.AGE_SECONDS:
+                return [] if out_port == in_port else [out_port]
+        # Rule 5: unknown or aged-out destination -> flood
+        return other
 
     def table(self):
         """{mac: port} as currently learned. Aged-out entries must be gone."""
-        raise NotImplementedError
+        return {m: p for m, (p, t) in self._table.items()
+                if self._now - t < self.AGE_SECONDS}
 
 
 # ------------------------------------------------------------------- harness

@@ -1,0 +1,10 @@
+Interface: 192.168.1.100 --- 0xe
+  Internet Address      Physical Address      Type
+  192.168.1.1           c8-d7-19-1a-2b-3c     dynamic
+  192.168.1.2           d4-f5-13-ab-cd-ef     dynamic
+  192.168.1.10          a8-20-66-12-34-56     dynamic
+  192.168.1.15          b0-be-76-fe-dc-ba     dynamic
+  192.168.1.255         ff-ff-ff-ff-ff-ff     static
+  224.0.0.22            01-00-5e-00-00-16     static
+  239.255.255.250       01-00-5e-7f-ff-fa     static
+  255.255.255.255       ff-ff-ff-ff-ff-ff     static
